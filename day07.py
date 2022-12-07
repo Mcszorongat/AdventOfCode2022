@@ -3,66 +3,88 @@ import functools as ft
 import itertools as it
 
 
-class Content:
-    def __init__(self, name):
-        self.name = name
+class Item:
+    def __init__(self, name: str, size: int, parent: Item):
+        self.name: str = name
+        self._size: int = size
+        self._parent: Item = parent
+
+    def __lt__(self, other: Item):
+        return self.name < other.name
+
+    def get_size(self) -> int:
+        return self._size
+    def set_size(self, value: int) -> None:
+        self._size = value
+    size = property(get_size, set_size)
+
+    def get_parent(self) -> Item:
+        return self._parent if self._parent else self
+    def set_parent(self, value: Item) -> None:
+        self._parent = value
+    parent = property(get_parent, set_parent)
+
+    def get_tree(self, level: int = 0) -> str:
+        return f'{"  "*(level)}- {self}'
 
 
-class File(Content):
-    def __init__(self, name: str, size: int ):
-        Content.__init__(self, name)
-        self.size = size
+class File(Item):
+    def __init__(self, name: str, size: int, parent: Item):
+        Item.__init__(self, name, size, parent)
 
-    def draw_tree(self, level):
-        return '  '*level + '- ' + self.name + f' (file, size={self.size})'
+    def __str__(self):
+        return f'{self.name} (file, size={self.size})'
 
 
-class Directory(Content):
-    def __init__(self, name: str):
-        Content.__init__(self, name)
+class Directory(Item):
+    def __init__(self, name: str, parent: Item):
+        Item.__init__(self, name, -1, parent)
         self.__separator = '/'
+        self._content: dict[str, Item] = dict()
+
         self.files: dict[str, File] = dict()
         self.directories: dict[str, Directory] = dict()
 
-
-    def draw_tree(self, level=0) -> str:
-        tree = ['  '*level + '- ' + self.name + ' (dir)',
-                *[file.draw_tree(level + 1) for file in self.files.values()],
-                *[directory.draw_tree(level + 1)
-                  for directory in self.directories.values()]]
-        return '\n'.join(tree)
-
-    def add_content(self, content: Content) -> None:
-        if isinstance(content, File):
-            self.files.update({content.name: content})
-        elif isinstance(content, Directory):
-            self.directories.update({content.name: content})
+    def __str__(self) -> str:
+        return f'{self.name} (dir)'
 
     def get_size(self) -> int:
-        directory_sizes = [directory.get_size()
-                           for directory in self.directories.values()]
-        file_sizes = [file.size for file in self.files.values()]
-        return sum(directory_sizes) + sum(file_sizes)
+        content_sizes = [content.size for content in self._content.values()]
+        return sum(content_sizes)
 
-    def get_sub_directory(self, relative_path: str) -> Directory:
-        first_part, *rest = relative_path.split(self.__separator)
-        sub_directory = self.directories.get(first_part)
+    def set_size(self) -> None:
+        pass
 
-        if sub_directory and len(rest):
-            return sub_directory.get_sub_directory(self.__separator.join(rest))
-        elif sub_directory and not len(rest):
-            return sub_directory
-        elif not sub_directory:
-            self.directories.update({first_part: Directory(first_part)})
-            return self.get_sub_directory(relative_path)
+    size = property(get_size, set_size)
 
-    def get_directories_with_sizes(self) -> list[(str, int)]:
-        own = [(self.name, self.get_size())]
-        if len(self.directories.values()):
-            children = list(it.chain(*[x.get_directories_with_sizes()
-                                    for x in self.directories.values()]))
-            own.extend(children)
-        return own
+    def add_content(self, content: Item) -> Item:
+        self._content.update({content.name: content})
+        return content
+
+    def get_subdirectory(self, name: str) -> Directory:
+        if (name == '.'):
+            return self
+        else:
+            subdirectory = self._content.get(name)
+            if not subdirectory:
+                self.add_content(subdirectory := Directory(name, self))
+        return subdirectory
+
+    # def get_subdirectory_by_path(self, relative_path: str) -> Directory:
+    #     name, *rest = relative_path.split(self.__separator)
+    #     subdirectory = self.get_subdirectory(name)
+
+    #     if len(rest):
+    #         return subdirectory.get_subdirectory_by_path(self.__separator.join(rest))
+    #     else:
+    #         return subdirectory
+
+    def get_tree(self, level:int=0) -> str:
+        contents = list(self._content.values())
+        # contents.sort()
+        tree = [f'{"  "*level}- {self}',
+                *[content.get_tree(level + 1) for content in contents]]
+        return '\n'.join(tree)
 
 
 def read_data(filename: str) -> str:
@@ -72,37 +94,32 @@ def read_data(filename: str) -> str:
 
 
 def preprocess(file_content: str) -> Directory:
-    root = Directory('/')
-    directories = []
+    root = Directory('/', None)
     current_directory = root
 
     for line in file_content:
-        if line.endswith(r'ls'): continue
-        elif line.startswith(r'$ cd'):
-            directory = line[5:]
-            if directory == r'/':
-                directories = []
+        if line.endswith(r'ls'):
+            continue
+        elif line.startswith(r'$ cd '):
+            destination = line[5:]
+            if (destination == r'/'):
                 current_directory = root
-            elif directory == r'..':
-                directories.pop()
-                if len(directories):
-                    current_directory = root.get_sub_directory('/'.join(directories))
-                else:
-                    current_directory = root
+            elif (destination == r'..'):
+                current_directory = current_directory.parent
             else:
-                directories.append(directory)
-                current_directory = root.get_sub_directory('/'.join(directories))
+                current_directory = current_directory.get_subdirectory(
+                    destination
+                )
         else:
-            if line.startswith('dir'):
-                current_directory.add_content(Directory(line[4:]))
-            else:
+            if not line.startswith('dir'):
                 size, name = line.split(' ')
-                current_directory.add_content(File(name, int(size)))
+                current_directory.add_content(File(name, int(size),
+                                                   current_directory))
+            else:
+                pass
+                # current_directory.add_content(Directory(line[4:],
+                #                                         current_directory))
     return root
-
-
-def postprocess(task_output: str) -> str:
-    return task_output
 
 
 def process():
@@ -111,31 +128,47 @@ def process():
         def wrapper(*args, **kwargs):
             preprocessed_input = preprocess(*args, **kwargs)
             output = func(preprocessed_input)
-            postprocessed_output = postprocess(output)
-            return postprocessed_output
+            return output
 
         return wrapper
 
     return process
 
 
+def get_directory_sizes(directory: Directory) -> list[int]:
+    own = [directory.size]
+    if len(directory._content.values()):
+        directories: list[Directory] = list(filter(
+            lambda content: isinstance(content, Directory),
+            directory._content.values()
+        ))
+        children = list(it.chain(*[get_directory_sizes(directory)
+                                    for directory in directories]))
+        own.extend(children)
+
+    return own
+
+
 @process()
 def task1(root: Directory) -> int:
-    dirs_with_sizes = root.get_directories_with_sizes()
-    fitting_sizes = [size for _, size in dirs_with_sizes if size < 100000]
+    upper_limit = 100000
+    fitting_sizes = list(filter(lambda size: size < upper_limit,
+                                get_directory_sizes(root)))
 
     return sum(fitting_sizes)
 
 
 @process()
 def task2(root: Directory) -> int:
-    dirs_with_sizes = root.get_directories_with_sizes()
-    free_space = 70000000 - dirs_with_sizes[0][1]
-    needed_space = 30000000 - free_space
-    sizes = [x[1] for x in dirs_with_sizes]
-    over_required = list(filter(lambda x: x > needed_space, sizes))
+    total_space = 70000000
+    required_free_space = 30000000
+    dir_sizes = get_directory_sizes(root)
+    actual_free_space =  total_space - max(dir_sizes)
+    minimum_space_to_free = required_free_space - actual_free_space
+    fitting_sizes = list(filter(lambda size: size > minimum_space_to_free,
+                                dir_sizes))
 
-    return min(over_required)
+    return min(fitting_sizes)
 
 
 if __name__ == "__main__":
